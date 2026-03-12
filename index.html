@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Securly On-Call Alert Response Protocol — Interactive</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;overflow:auto}
+.toolbar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:.75rem;padding:.5rem 1.2rem;background:#1e293b;border-bottom:1px solid #334155;flex-wrap:wrap}
+.toolbar h1{font-size:1rem;font-weight:600;color:#f8fafc;margin-right:auto}
+.toolbar .hint{font-size:.72rem;color:#64748b}
+.toolbar button{padding:.3rem .7rem;border:1px solid #475569;border-radius:6px;background:#334155;color:#e2e8f0;font-size:.78rem;cursor:pointer}
+.toolbar button:hover{background:#475569}
+.legend{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;padding:.4rem;font-size:.72rem;color:#64748b;background:#1e293b;border-bottom:1px solid #1e293b}
+.legend span{display:flex;align-items:center;gap:4px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+svg{display:block;width:100%;height:calc(100vh - 70px);background:linear-gradient(180deg,#1e293b 0%,#0f172a 40%)}
+.node-group{cursor:grab}
+.node-group:hover rect,.node-group:hover polygon{filter:brightness(1.12)}
+.node-group.dragging{cursor:grabbing}
+.connector{stroke-dasharray:6 4;animation:dash 1.2s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-20}}
+.pulse-ring{animation:pulseRing 2s ease-in-out infinite;transform-origin:center}
+@keyframes pulseRing{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:0;transform:scale(1.12)}}
+.edit-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:200;justify-content:center;align-items:center}
+.edit-overlay.show{display:flex}
+.edit-modal{background:#1e293b;border:1px solid #475569;border-radius:12px;padding:1.5rem;width:360px}
+.edit-modal h3{font-size:.95rem;color:#f8fafc;margin-bottom:.75rem}
+.edit-modal label{display:block;font-size:.8rem;color:#94a3b8;margin-bottom:.25rem}
+.edit-modal input{width:100%;padding:.4rem .6rem;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:.85rem;margin-bottom:.6rem;font-family:inherit}
+.edit-modal .btn-row{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem}
+.edit-modal button{padding:.35rem 1rem;border:1px solid #475569;border-radius:6px;background:#334155;color:#e2e8f0;cursor:pointer;font-size:.8rem}
+.edit-modal button.primary{background:#3b82f6;border-color:#3b82f6}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>Securly On-Call Alert Response Protocol</h1>
+  <span class="hint">Drag nodes to move &bull; Double-click to edit text</span>
+  <button onclick="resetLayout()">Reset Layout</button>
+</div>
+<div class="legend">
+  <span><i style="background:#e74c3c"></i> Alert</span>
+  <span><i style="background:#f39c12"></i> Decision</span>
+  <span><i style="background:#3498db"></i> Daytime</span>
+  <span><i style="background:#8e44ad"></i> After-Hours</span>
+  <span><i style="background:#2ecc71"></i> Action</span>
+  <span><i style="background:#1abc9c"></i> Complete</span>
+  <span><i style="background:#64748b"></i> Info Only</span>
+</div>
+
+<svg id="chart" viewBox="0 0 1400 1080" preserveAspectRatio="xMidYMin meet"></svg>
+
+<div class="edit-overlay" id="editOverlay">
+  <div class="edit-modal">
+    <h3>Edit Node</h3>
+    <label>Line 1</label><input type="text" id="editLine1"/>
+    <label>Line 2 (optional)</label><input type="text" id="editLine2"/>
+    <label>Line 3 (optional)</label><input type="text" id="editLine3"/>
+    <div class="btn-row">
+      <button onclick="closeEdit()">Cancel</button>
+      <button class="primary" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('chart');
+
+function el(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k,v] of Object.entries(attrs)) { if(v!=null) e.setAttribute(k, v); }
+  return e;
+}
+
+// ================================================================
+// NODE DATA - positions matched to the static HTML version
+// x,y = center of node; w,h = full dimensions
+// ================================================================
+const nodes = [
+  // ALERT
+  {id:'alert', shape:'rect', x:600, y:54, w:360, h:68, fill:'#e74c3c', stroke:null, rx:12,
+   texts:['🚨  Category 5 Alert Received','Self-harm risk · Violence threats · Active emergency'], textColor:'#fff', subColor:'#fecaca', fontSize:[15,11], bold:[true,false]},
+
+  // DECISION
+  {id:'decision', shape:'diamond', x:600, y:182, w:240, h:100, fill:'#f39c12', stroke:'#e67e22',
+   texts:['During School Hours','or After Hours?'], textColor:'#fff', fontSize:[13,13], bold:[true,true]},
+
+  // ===== DAYTIME =====
+  {id:'day-head', shape:'rect', x:300, y:285, w:260, h:46, fill:'#3498db', stroke:null, rx:10,
+   texts:['DAYTIME PROTOCOL'], textColor:'#fff', fontSize:[14], bold:[true]},
+
+  {id:'notify', shape:'rect', x:300, y:364, w:310, h:44, fill:'#1e3a5f', stroke:'#3498db', rx:8,
+   texts:['📞 Notify via Direct Phone Call'], textColor:'#93c5fd', fontSize:[13], bold:[true]},
+
+  {id:'d-prin', shape:'rect', x:135, y:446, w:100, h:36, fill:'#1e3a5f', stroke:'#2980b9', rx:6,
+   texts:['Principal'], textColor:'#bfdbfe', fontSize:[11], bold:[false]},
+  {id:'d-coun', shape:'rect', x:245, y:446, w:100, h:36, fill:'#1e3a5f', stroke:'#2980b9', rx:6,
+   texts:['Counselor /','Social Worker'], textColor:'#bfdbfe', fontSize:[10,10], bold:[false,false]},
+  {id:'d-sec', shape:'rect', x:355, y:446, w:100, h:36, fill:'#1e3a5f', stroke:'#2980b9', rx:6,
+   texts:['On-Site','Security'], textColor:'#bfdbfe', fontSize:[10,10], bold:[false,false]},
+  {id:'d-csec', shape:'rect', x:465, y:446, w:100, h:36, fill:'#1e3a5f', stroke:'#2980b9', rx:6,
+   texts:['Central','Security'], textColor:'#bfdbfe', fontSize:[10,10], bold:[false,false]},
+
+  {id:'action', shape:'rect', x:300, y:528, w:300, h:44, fill:'#1e3a5f', stroke:'#3498db', rx:8,
+   texts:['⚡ Staff Takes Immediate Action'], textColor:'#93c5fd', fontSize:[13], bold:[true]},
+
+  {id:'locate', shape:'rect', x:300, y:596, w:320, h:44, fill:'#1e3a5f', stroke:'#3498db', rx:8,
+   texts:['🔍 Locate & Intervene with Student'], textColor:'#93c5fd', fontSize:[13], bold:[true]},
+
+  {id:'escalate', shape:'diamond', x:300, y:700, w:200, h:92, fill:'#f39c12', stroke:'#e67e22',
+   texts:['Escalation','Needed?'], textColor:'#fff', fontSize:[12,12], bold:[true,true]},
+
+  {id:'rrpd', shape:'rect', x:120, y:802, w:180, h:52, fill:'#7f1d1d', stroke:'#e74c3c', rx:8,
+   texts:['📞 Contact RRPD','Immediately'], textColor:'#fca5a5', subColor:'#fecaca', fontSize:[12,10.5], bold:[true,false]},
+
+  {id:'continue', shape:'rect', x:480, y:802, w:170, h:52, fill:'#14532d', stroke:'#2ecc71', rx:8,
+   texts:['Continue Managing','Situation On-Site'], textColor:'#86efac', subColor:'#bbf7d0', fontSize:[12,10.5], bold:[true,false]},
+
+  {id:'doc1', shape:'rect', x:300, y:910, w:210, h:44, fill:'#134e4a', stroke:'#1abc9c', rx:10,
+   texts:['✅ Document & Follow Up'], textColor:'#5eead4', fontSize:[13], bold:[true]},
+
+  // ===== AFTER-HOURS =====
+  {id:'aft-head', shape:'rect', x:960, y:285, w:260, h:46, fill:'#8e44ad', stroke:null, rx:10,
+   texts:['AFTER-HOURS PROTOCOL'], textColor:'#fff', fontSize:[14], bold:[true]},
+
+  // Branch 1: Text
+  {id:'txt-hdr', shape:'rect', x:660, y:384, w:190, h:40, fill:'#3b1a5e', stroke:'#8e44ad', rx:8,
+   texts:['📱 Text Message To:'], textColor:'#d8b4fe', fontSize:[12], bold:[true]},
+  {id:'a-prin', shape:'rect', x:570, y:452, w:90, h:32, fill:'#3b1a5e', stroke:'#7d3c98', rx:5,
+   texts:['Principal'], textColor:'#c4b5fd', fontSize:[10.5], bold:[false]},
+  {id:'a-coun', shape:'rect', x:660, y:452, w:90, h:32, fill:'#3b1a5e', stroke:'#7d3c98', rx:5,
+   texts:['Counselor /','Social Worker'], textColor:'#c4b5fd', fontSize:[9.5,9.5], bold:[false,false]},
+  {id:'a-sec', shape:'rect', x:750, y:452, w:90, h:32, fill:'#3b1a5e', stroke:'#7d3c98', rx:5,
+   texts:['On-Site','Security'], textColor:'#c4b5fd', fontSize:[9.5,9.5], bold:[false,false]},
+  {id:'info', shape:'rect', x:660, y:528, w:184, h:44, fill:'#334155', stroke:'#64748b', rx:8,
+   texts:['ℹ️ Informational Only','No Action Required'], textColor:'#94a3b8', subColor:'#64748b', fontSize:[11.5,10.5], bold:[true,false]},
+
+  // Branch 2: Central Security
+  {id:'cs-call', shape:'rect', x:960, y:390, w:174, h:52, fill:'#3b1a5e', stroke:'#8e44ad', rx:8,
+   texts:['📞 Direct Phone Call','→ Central Security'], textColor:'#d8b4fe', subColor:'#c4b5fd', fontSize:[12,11], bold:[true,false]},
+  {id:'cs-steps', shape:'rect', x:960, y:472, w:190, h:52, fill:'#3b1a5e', stroke:'#8e44ad', rx:8,
+   texts:['Central Security','Takes Situational Steps'], textColor:'#d8b4fe', subColor:'#c4b5fd', fontSize:[12,11], bold:[true,false]},
+  {id:'cs-rrpd', shape:'rect', x:960, y:548, w:204, h:44, fill:'#14532d', stroke:'#2ecc71', rx:8,
+   texts:['Works with RRPD to','Gather & Document Info'], textColor:'#86efac', subColor:'#bbf7d0', fontSize:[11.5,11], bold:[true,false]},
+
+  // Branch 3: Primary
+  {id:'primary', shape:'rect', x:1260, y:394, w:200, h:60, fill:'#7f1d1d', stroke:'#e74c3c', rx:8,
+   texts:['PRIMARY INTERVENTION','Securly On-Call Team','Contacts RRPD → Wellness Check'], textColor:'#fca5a5', subColor:'#fecaca', fontSize:[11,12,10.5], bold:[true,true,false]},
+
+  // ===== SECONDARY OPTION =====
+  {id:'rot-team', shape:'rect', x:960, y:708, w:320, h:64, fill:'#3b1a5e', stroke:'#a855f7', rx:10,
+   texts:['RRPS Rotational On-Call Team','Principal + Counselor + Security','Assumes Responsibility for Situation'], textColor:'#e9d5ff', subColor:'#c4b5fd', fontSize:[12,11,10.5], bold:[true,false,false]},
+
+  {id:'case-dec', shape:'diamond', x:960, y:810, w:180, h:80, fill:'#f39c12', stroke:'#e67e22',
+   texts:['Case-by-Case','Decision'], textColor:'#fff', fontSize:[11.5,11.5], bold:[true,true]},
+
+  {id:'parents', shape:'rect', x:800, y:880, w:170, h:40, fill:'#14532d', stroke:'#2ecc71', rx:8,
+   texts:['👪 Contact Parents'], textColor:'#86efac', fontSize:[12], bold:[true]},
+  {id:'rrpd2', shape:'rect', x:1120, y:880, w:170, h:40, fill:'#14532d', stroke:'#2ecc71', rx:8,
+   texts:['📞 Notify RRPD'], textColor:'#86efac', fontSize:[12], bold:[true]},
+
+  {id:'doc2', shape:'rect', x:960, y:978, w:210, h:44, fill:'#134e4a', stroke:'#1abc9c', rx:10,
+   texts:['✅ Document & Follow Up'], textColor:'#5eead4', fontSize:[13], bold:[true]},
+];
+
+// Store originals for reset
+const origPos = {};
+nodes.forEach(n => { origPos[n.id] = {x:n.x, y:n.y}; });
+const nodeMap = {};
+nodes.forEach(n => nodeMap[n.id] = n);
+
+// ================================================================
+// CONNECTIONS — explicit routing segments
+// Each connection is: { segs: [[x1,y1,x2,y2],...], color, arrow:true/false on last seg }
+// We compute these dynamically based on node positions
+// ================================================================
+
+function nTop(n)    { return n.y - n.h/2; }
+function nBot(n)    { return n.y + n.h/2; }
+function nLeft(n)   { return n.x - n.w/2; }
+function nRight(n)  { return n.x + n.w/2; }
+
+function buildConnections() {
+  const n = nodeMap;
+  const c = [];
+
+  // Helper: straight vertical
+  function vert(from, to, color) { c.push({segs:[[from.x, nBot(from), from.x, nTop(to)]], color, arrow:true}); }
+  // Helper: L-shaped horizontal then down
+  function hDown(fromX, fromY, toX, toY, color, arr) { c.push({segs:[[fromX,fromY,toX,fromY],[toX,fromY,toX,toY]], color, arrow:arr!==false}); }
+
+  // Alert → Decision
+  vert(n.alert, n.decision, '#64748b');
+
+  // Decision → Daytime (left side of diamond → go left → down to day-head)
+  const decL = {x: n.decision.x - n.decision.w/2, y: n.decision.y};
+  c.push({segs:[
+    [decL.x, decL.y, n['day-head'].x, decL.y],
+    [n['day-head'].x, decL.y, n['day-head'].x, nTop(n['day-head'])]
+  ], color:'#3498db', arrow:true});
+
+  // Decision → After-hours (right side of diamond → go right → down to aft-head)
+  const decR = {x: n.decision.x + n.decision.w/2, y: n.decision.y};
+  c.push({segs:[
+    [decR.x, decR.y, n['aft-head'].x, decR.y],
+    [n['aft-head'].x, decR.y, n['aft-head'].x, nTop(n['aft-head'])]
+  ], color:'#8e44ad', arrow:true});
+
+  // Day-head → Notify
+  vert(n['day-head'], n.notify, '#3498db');
+
+  // Notify → 4 recipients (tree branch)
+  const notifyBotY = nBot(n.notify);
+  const railY = notifyBotY + 14;
+  const recips = ['d-prin','d-coun','d-sec','d-csec'];
+  c.push({segs:[[n.notify.x, notifyBotY, n.notify.x, railY]], color:'#3498db', arrow:false});
+  c.push({segs:[[n[recips[0]].x, railY, n[recips[3]].x, railY]], color:'#3498db', arrow:false});
+  recips.forEach(rid => {
+    c.push({segs:[[n[rid].x, railY, n[rid].x, nTop(n[rid])]], color:'#3498db', arrow:true});
+  });
+
+  // 4 recipients → Action (merge)
+  const mergeY = nBot(n['d-prin']) + 14;
+  recips.forEach(rid => {
+    c.push({segs:[[n[rid].x, nBot(n[rid]), n[rid].x, mergeY]], color:'#3498db', arrow:false});
+  });
+  c.push({segs:[[n[recips[0]].x, mergeY, n[recips[3]].x, mergeY]], color:'#3498db', arrow:false});
+  c.push({segs:[[n.action.x, mergeY, n.action.x, nTop(n.action)]], color:'#3498db', arrow:true});
+
+  // Action → Locate
+  vert(n.action, n.locate, '#3498db');
+
+  // Locate → Escalate
+  vert(n.locate, n.escalate, '#64748b');
+
+  // Escalate → RRPD (left, Yes)
+  const escL = {x: n.escalate.x - n.escalate.w/2, y: n.escalate.y};
+  c.push({segs:[
+    [escL.x, escL.y, n.rrpd.x, escL.y],
+    [n.rrpd.x, escL.y, n.rrpd.x, nTop(n.rrpd)]
+  ], color:'#e74c3c', arrow:true});
+
+  // Escalate → Continue (right, No)
+  const escR = {x: n.escalate.x + n.escalate.w/2, y: n.escalate.y};
+  c.push({segs:[
+    [escR.x, escR.y, n.continue.x, escR.y],
+    [n.continue.x, escR.y, n.continue.x, nTop(n.continue)]
+  ], color:'#2ecc71', arrow:true});
+
+  // RRPD + Continue → Doc1 (merge)
+  const docMergeY = nBot(n.rrpd) + 20;
+  c.push({segs:[[n.rrpd.x, nBot(n.rrpd), n.rrpd.x, docMergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.continue.x, nBot(n.continue), n.continue.x, docMergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.rrpd.x, docMergeY, n.continue.x, docMergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.doc1.x, docMergeY, n.doc1.x, nTop(n.doc1)]], color:'#64748b', arrow:true});
+
+  // ===== AFTER-HOURS BRANCHES =====
+  // aft-head → 3 branches (tree)
+  const aftBot = nBot(n['aft-head']);
+  const aftRailY = aftBot + 16;
+  c.push({segs:[[n['aft-head'].x, aftBot, n['aft-head'].x, aftRailY]], color:'#8e44ad', arrow:false});
+  c.push({segs:[[n['txt-hdr'].x, aftRailY, n.primary.x, aftRailY]], color:'#8e44ad', arrow:false});
+  ['txt-hdr','cs-call','primary'].forEach(bid => {
+    c.push({segs:[[n[bid].x, aftRailY, n[bid].x, nTop(n[bid])]], color:'#8e44ad', arrow:true});
+  });
+
+  // txt-hdr → 3 text recipients (tree)
+  const txtBot = nBot(n['txt-hdr']);
+  const txtRailY = txtBot + 12;
+  c.push({segs:[[n['txt-hdr'].x, txtBot, n['txt-hdr'].x, txtRailY]], color:'#8e44ad', arrow:false});
+  c.push({segs:[[n['a-prin'].x, txtRailY, n['a-sec'].x, txtRailY]], color:'#8e44ad', arrow:false});
+  ['a-prin','a-coun','a-sec'].forEach(rid => {
+    c.push({segs:[[n[rid].x, txtRailY, n[rid].x, nTop(n[rid])]], color:'#8e44ad', arrow:true});
+  });
+
+  // Text recipients → Info (merge)
+  const txtMergeY = nBot(n['a-prin']) + 14;
+  ['a-prin','a-coun','a-sec'].forEach(rid => {
+    c.push({segs:[[n[rid].x, nBot(n[rid]), n[rid].x, txtMergeY]], color:'#64748b', arrow:false});
+  });
+  c.push({segs:[[n['a-prin'].x, txtMergeY, n['a-sec'].x, txtMergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.info.x, txtMergeY, n.info.x, nTop(n.info)]], color:'#64748b', arrow:true});
+
+  // cs-call → cs-steps → cs-rrpd
+  vert(n['cs-call'], n['cs-steps'], '#8e44ad');
+  vert(n['cs-steps'], n['cs-rrpd'], '#8e44ad');
+
+  // Secondary separator → rot-team
+  c.push({segs:[[n['aft-head'].x, 648, n['aft-head'].x, nTop(n['rot-team'])]], color:'#8e44ad', arrow:true});
+
+  // rot-team → case-dec
+  vert(n['rot-team'], n['case-dec'], '#64748b');
+
+  // case-dec → parents (left)
+  const cdL = {x: n['case-dec'].x - n['case-dec'].w/2, y: n['case-dec'].y};
+  c.push({segs:[
+    [cdL.x, cdL.y, n.parents.x, cdL.y],
+    [n.parents.x, cdL.y, n.parents.x, nTop(n.parents)]
+  ], color:'#2ecc71', arrow:true});
+
+  // case-dec → rrpd2 (right)
+  const cdR = {x: n['case-dec'].x + n['case-dec'].w/2, y: n['case-dec'].y};
+  c.push({segs:[
+    [cdR.x, cdR.y, n.rrpd2.x, cdR.y],
+    [n.rrpd2.x, cdR.y, n.rrpd2.x, nTop(n.rrpd2)]
+  ], color:'#2ecc71', arrow:true});
+
+  // parents + rrpd2 → doc2 (merge)
+  const doc2MergeY = nBot(n.parents) + 20;
+  c.push({segs:[[n.parents.x, nBot(n.parents), n.parents.x, doc2MergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.rrpd2.x, nBot(n.rrpd2), n.rrpd2.x, doc2MergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.parents.x, doc2MergeY, n.rrpd2.x, doc2MergeY]], color:'#64748b', arrow:false});
+  c.push({segs:[[n.doc2.x, doc2MergeY, n.doc2.x, nTop(n.doc2)]], color:'#64748b', arrow:true});
+
+  return c;
+}
+
+// ================================================================
+// RENDERING
+// ================================================================
+const connGroup = el('g', {id:'conn-layer'});
+const sepGroup = el('g', {id:'sep-layer'});
+const nodeLayer = el('g', {id:'node-layer'});
+const labelLayer = el('g', {id:'label-layer'});
+svg.appendChild(connGroup);
+svg.appendChild(sepGroup);
+svg.appendChild(nodeLayer);
+svg.appendChild(labelLayer);
+
+const nodeGroups = {};
+
+function renderNode(n) {
+  const g = el('g', {class:'node-group', 'data-id':n.id});
+
+  if (n.id === 'alert') {
+    // Pulse ring
+    g.appendChild(el('rect', {
+      class:'pulse-ring',
+      x:n.x-n.w/2-2, y:n.y-n.h/2-2, width:n.w+4, height:n.h+4,
+      rx:(n.rx||8)+2, fill:'none', stroke:'#e74c3c', 'stroke-width':2
+    }));
+  }
+
+  if (n.shape === 'diamond') {
+    const hw = n.w/2, hh = n.h/2;
+    g.appendChild(el('polygon', {
+      points:`${n.x},${n.y-hh} ${n.x+hw},${n.y} ${n.x},${n.y+hh} ${n.x-hw},${n.y}`,
+      fill:n.fill, stroke:n.stroke||'none', 'stroke-width':1.5
+    }));
+  } else {
+    g.appendChild(el('rect', {
+      x:n.x-n.w/2, y:n.y-n.h/2, width:n.w, height:n.h,
+      rx:n.rx||8, fill:n.fill, stroke:n.stroke||'none', 'stroke-width':1.5
+    }));
+  }
+
+  // Texts
+  const lineCount = n.texts.length;
+  const lineH = lineCount <= 1 ? 0 : 15;
+  const totalH = (lineCount - 1) * lineH;
+  const startY = n.y - totalH/2 + 5;
+
+  n.texts.forEach((txt, i) => {
+    const t = el('text', {
+      x:n.x, y:startY + i*lineH,
+      'text-anchor':'middle',
+      fill: i===0 ? n.textColor : (n.subColor || n.textColor),
+      'font-size': n.fontSize[i] || 11,
+      'font-weight': (n.bold && n.bold[i]) ? '700' : '400'
+    });
+    t.textContent = txt;
+    g.appendChild(t);
+  });
+
+  nodeLayer.appendChild(g);
+  nodeGroups[n.id] = g;
+}
+
+function renderConnections() {
+  connGroup.innerHTML = `
+    <defs>
+      <marker id="a-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#64748b"/></marker>
+      <marker id="a-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#3498db"/></marker>
+      <marker id="a-purp" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#8e44ad"/></marker>
+      <marker id="a-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e74c3c"/></marker>
+      <marker id="a-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#2ecc71"/></marker>
+    </defs>
+  `;
+  const mMap = {'#64748b':'a-gray','#3498db':'a-blue','#8e44ad':'a-purp','#e74c3c':'a-red','#2ecc71':'a-green'};
+
+  const conns = buildConnections();
+  conns.forEach(conn => {
+    conn.segs.forEach((seg, i) => {
+      const isLast = i === conn.segs.length - 1;
+      const attrs = {
+        x1:seg[0], y1:seg[1], x2:seg[2], y2:seg[3],
+        stroke:conn.color, 'stroke-width':2, class:'connector'
+      };
+      if (isLast && conn.arrow) {
+        attrs['marker-end'] = `url(#${mMap[conn.color]||'a-gray'})`;
+      }
+      connGroup.appendChild(el('line', attrs));
+    });
+  });
+}
+
+function renderSeparator() {
+  sepGroup.innerHTML = '';
+  // Position relative to aft-head center
+  const sepY = 610;
+  sepGroup.appendChild(el('line', {x1:580, y1:sepY, x2:1360, y2:sepY, stroke:'#475569', 'stroke-width':1, 'stroke-dasharray':'8 4'}));
+  const t = el('text', {x:960, y:sepY+26, 'text-anchor':'middle', fill:'#94a3b8', 'font-size':12, 'font-style':'italic'});
+  t.textContent = 'Secondary Option';
+  sepGroup.appendChild(t);
+}
+
+function renderEdgeLabels() {
+  labelLayer.innerHTML = '';
+  const n = nodeMap;
+
+  // "School Hours" label — between decision left edge and day-head
+  const shX = (n.decision.x - n.decision.w/2 + n['day-head'].x) / 2;
+  const shY = n.decision.y - 16;
+  addLabel(shX, shY, 'School Hours', '#3498db', '#93c5fd', 120);
+
+  // "After Hours" label — between decision right edge and aft-head
+  const ahX = (n.decision.x + n.decision.w/2 + n['aft-head'].x) / 2;
+  const ahY = n.decision.y - 16;
+  addLabel(ahX, ahY, 'After Hours', '#8e44ad', '#d8b4fe', 110);
+
+  // "Yes" label near escalation left
+  const yX = n.escalate.x - n.escalate.w/2 - 30;
+  const yY = n.escalate.y - 10;
+  addLabel(yX, yY, 'Yes', '#e74c3c', '#fca5a5', 50);
+
+  // "No" label near escalation right
+  const nX = n.escalate.x + n.escalate.w/2 + 25;
+  const nY = n.escalate.y - 10;
+  addLabel(nX, nY, 'No', '#2ecc71', '#86efac', 42);
+}
+
+function addLabel(cx, cy, text, borderColor, textColor, w) {
+  const g = el('g', {});
+  g.appendChild(el('rect', {x:cx-w/2, y:cy, width:w, height:20, rx:8, fill:'#1e293b', stroke:borderColor, 'stroke-width':1}));
+  const t = el('text', {x:cx, y:cy+14, 'text-anchor':'middle', fill:textColor, 'font-size':11, 'font-weight':'600'});
+  t.textContent = text;
+  g.appendChild(t);
+  labelLayer.appendChild(g);
+}
+
+// Footer watermark
+function renderFooter() {
+  const t = el('text', {x:700, y:1060, 'text-anchor':'middle', fill:'#334155', 'font-size':11});
+  t.textContent = 'Securly On-Call Alert Response Protocol — Category 5 — RRPS';
+  svg.appendChild(t);
+}
+
+// ================================================================
+// DRAG
+// ================================================================
+let dragging = null, dragStart = {x:0,y:0}, nodeStart = {x:0,y:0};
+
+function toSVGPoint(e) {
+  const pt = svg.createSVGPoint();
+  const src = e.touches ? e.touches[0] : e;
+  pt.x = src.clientX; pt.y = src.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+svg.addEventListener('mousedown', (e) => {
+  const g = e.target.closest('.node-group');
+  if (!g) return;
+  const id = g.dataset.id;
+  const nd = nodes.find(n=>n.id===id);
+  if (!nd) return;
+  dragging = nd;
+  const p = toSVGPoint(e);
+  dragStart = {x:p.x, y:p.y};
+  nodeStart = {x:nd.x, y:nd.y};
+  g.classList.add('dragging');
+  e.preventDefault();
+});
+
+svg.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const p = toSVGPoint(e);
+  dragging.x = nodeStart.x + (p.x - dragStart.x);
+  dragging.y = nodeStart.y + (p.y - dragStart.y);
+  rebuildNode(dragging);
+  renderConnections();
+  renderEdgeLabels();
+});
+
+document.addEventListener('mouseup', () => {
+  if (dragging) {
+    const g = nodeGroups[dragging.id];
+    if (g) g.classList.remove('dragging');
+    dragging = null;
+  }
+});
+
+function rebuildNode(n) {
+  const old = nodeGroups[n.id];
+  if (old) old.remove();
+  renderNode(n);
+}
+
+// ================================================================
+// DOUBLE-CLICK EDIT
+// ================================================================
+let editId = null;
+svg.addEventListener('dblclick', (e) => {
+  const g = e.target.closest('.node-group');
+  if (!g) return;
+  editId = g.dataset.id;
+  const nd = nodes.find(n=>n.id===editId);
+  document.getElementById('editLine1').value = nd.texts[0]||'';
+  document.getElementById('editLine2').value = nd.texts[1]||'';
+  document.getElementById('editLine3').value = nd.texts[2]||'';
+  document.getElementById('editOverlay').classList.add('show');
+  setTimeout(()=>document.getElementById('editLine1').focus(),100);
+});
+
+function saveEdit() {
+  if (!editId) return;
+  const nd = nodes.find(n=>n.id===editId);
+  nd.texts[0] = document.getElementById('editLine1').value;
+  const l2 = document.getElementById('editLine2').value;
+  const l3 = document.getElementById('editLine3').value;
+  if (l2) { nd.texts[1] = l2; } else if (nd.texts.length>1) { nd.texts.splice(1); }
+  if (l3 && nd.texts.length>=2) { nd.texts[2] = l3; } else if (nd.texts.length>2) { nd.texts.splice(2); }
+  rebuildNode(nd);
+  closeEdit();
+}
+
+function closeEdit() { editId=null; document.getElementById('editOverlay').classList.remove('show'); }
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape')closeEdit();if(e.key==='Enter'&&editId&&!e.shiftKey){e.preventDefault();saveEdit();}});
+
+// ================================================================
+// RESET
+// ================================================================
+function resetLayout() {
+  nodes.forEach(n => { n.x = origPos[n.id].x; n.y = origPos[n.id].y; });
+  nodeLayer.innerHTML = '';
+  labelLayer.innerHTML = '';
+  nodes.forEach(renderNode);
+  renderEdgeLabels();
+  renderConnections();
+  renderSeparator();
+}
+
+// ================================================================
+// INIT
+// ================================================================
+nodes.forEach(renderNode);
+renderSeparator();
+renderEdgeLabels();
+renderConnections();
+renderFooter();
+</script>
+</body>
+</html>
